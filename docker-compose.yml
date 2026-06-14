@@ -1,0 +1,127 @@
+# =============================================================================
+# Docker Compose — FleetOps Maintenance Microservice (Local Development)
+# SAD Reference: ADR-8, ADR-10
+# Rule R4: Database service, backend service, healthchecks, named volumes,
+#           .env file, custom network
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # SAD Reference: ADR-2 — PostgreSQL (local equivalent of Supabase)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16.3-alpine3.20
+    container_name: fleetops-maintenance-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-maintenance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maintenance_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-maintenance_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-maintenance} -d ${POSTGRES_DB:-maintenance_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - fleetops-net
+
+  # ---------------------------------------------------------------------------
+  # Database Migrations (Archetype Convention)
+  # ---------------------------------------------------------------------------
+  migration:
+    image: migrate/migrate:v4.17.0
+    container_name: fleetops-maintenance-migration
+    volumes:
+      - ./migrations:/migrations
+    command: -path=/migrations -database=postgres://${POSTGRES_USER:-maintenance}:${POSTGRES_PASSWORD:-maintenance_secret}@postgres:5432/${POSTGRES_DB:-maintenance_db}?sslmode=disable up
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - fleetops-net
+
+  # ---------------------------------------------------------------------------
+  # Maintenance Microservice (Backend)
+  # ---------------------------------------------------------------------------
+  maintenance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleetops-maintenance-svc
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-maintenance}:${POSTGRES_PASSWORD:-maintenance_secret}@postgres:5432/${POSTGRES_DB:-maintenance_db}?sslmode=disable
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - fleetops-net
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — Metric Collection
+  # SAD Reference: ADR-10
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: fleetops-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      maintenance:
+        condition: service_healthy
+    networks:
+      - fleetops-net
+
+  # ---------------------------------------------------------------------------
+  # Grafana — Metric Visualization and Monitoring
+  # SAD Reference: ADR-10
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: fleetops-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - fleetops-net
+
+# Named volumes for data persistence (Rule R4)
+volumes:
+  pgdata:
+    name: fleetops-maintenance-pgdata
+  prometheus_data:
+    name: fleetops-prometheus-data
+  grafana_data:
+    name: fleetops-grafana-data
+
+# Custom network for inter-service communication (Rule R4)
+networks:
+  fleetops-net:
+    name: fleetops-maintenance-network
+    driver: bridge

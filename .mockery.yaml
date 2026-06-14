@@ -1,0 +1,11 @@
+# mockery configuration
+# SAD Reference: A-9 — testify + mockery for test mocks
+all: false
+dir: internal/port
+output: internal/mocks
+outpkg: mocks
+packages:
+  github.com/fleetops/maintenance/internal/port:
+    interfaces:
+      MaintenanceRepository:
+      VehicleClient:
