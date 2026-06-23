@@ -26,13 +26,12 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Check formatting (gofumpt)
+      - name: Formatting
         run: |
-          go install mvdan.cc/gofumpt@latest
           gofumpt -d .
           test -z "$(gofumpt -l .)" || (echo "Files need formatting" && exit 1)
 
-      - name: Run golangci-lint
+      - name: Linting
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.59
